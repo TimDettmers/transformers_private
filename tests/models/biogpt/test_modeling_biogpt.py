@@ -273,7 +273,9 @@ class BioGptModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase
         self.config_tester = ConfigTester(self, config_class=BioGptConfig, hidden_size=37)
 
     def test_config(self):
-        check_fn = lambda attribute, config_class: attribute == "layer_norm_eps"
+        def check_fn(attribute):
+            return attribute == "layer_norm_eps"
+
         self.config_tester.run_common_tests(check_attribute_usage_fn=check_fn)
 
     def test_model(self):

@@ -279,7 +279,9 @@ class WhisperModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCas
 
     def test_config(self):
         # TODO: check and potentially remove these unused attributes, then update `check_fn`
-        check_fn = lambda attribute, config_class: True
+        def check_fn(attribute):  # noqa
+            return True
+
         self.config_tester.run_common_tests(check_attribute_usage_fn=check_fn)
 
     def test_save_load_strict(self):
