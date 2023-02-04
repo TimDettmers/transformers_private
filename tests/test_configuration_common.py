@@ -278,7 +278,7 @@ class ConfigTester(object):
 
                 # configuration class specific cases
                 if not case_allowed and check_fn is not None:
-                    case_allowed = check_fn(attribute, self.config_class)
+                    case_allowed = check_fn(attribute)
 
         return attribute_used or case_allowed
 
