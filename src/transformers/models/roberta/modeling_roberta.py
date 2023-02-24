@@ -1221,6 +1221,9 @@ class RobertaForSequenceClassification(RobertaPreTrainedModel):
         sequence_output = outputs[0]
         logits = self.classifier(sequence_output)
 
+        labels = labels.to(logits.device)
+
+
         loss = None
         if labels is not None:
             if self.config.problem_type is None:
@@ -1439,7 +1442,7 @@ class RobertaClassificationHead(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.fc1 = nn.Linear(config.hidden_size, config.hidden_size)
         classifier_dropout = (
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
@@ -1449,7 +1452,7 @@ class RobertaClassificationHead(nn.Module):
     def forward(self, features, **kwargs):
         x = features[:, 0, :]  # take <s> token (equiv. to [CLS])
         x = self.dropout(x)
-        x = self.dense(x)
+        x = self.fc1(x)
         x = torch.tanh(x)
         x = self.dropout(x)
         x = self.out_proj(x)

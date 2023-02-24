@@ -22,6 +22,8 @@ import random
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
+import torch
+import bitsandbytes as bnb
 
 import datasets
 import evaluate
@@ -143,6 +145,27 @@ class DataTrainingArguments:
     )
     test_file: Optional[str] = field(default=None, metadata={"help": "A csv or a json file containing the test data."})
 
+    use_adapter: Optional[bool] = field(
+        default=False,
+        metadata={"help": "tk_instruct will train a model combining all valid instruction encodings. This will overwrite the other settings about instruction encoding."} 
+    )
+    bits: Optional[int] = field(
+        default=16,
+        metadata={"help": "number of in-context negative examples."}
+    )
+
+    lora_r: Optional[int] = field(
+        default=16,
+        metadata={"help": "number of in-context negative examples."}
+    )
+    lora_alpha: Optional[int] = field(
+        default=32.0,
+        metadata={"help": "number of in-context negative examples."}
+    )
+    lora_modules: Optional[str] = field(
+        default='ffn',
+        metadata={"help": "number of in-context negative examples."}
+    )
     def __post_init__(self):
         if self.task_name is not None:
             self.task_name = self.task_name.lower()
@@ -215,6 +238,12 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    print(data_args)
+    print(training_args)
+    print(model_args)
+    if not data_args.use_adapter and data_args.bits < 16:
+        raise ValueError('4/8-bit can only be used wtih LoRA adapters but use_adapter=False')
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
@@ -351,6 +380,11 @@ def main():
     #
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
+    free_in_GB = int(torch.cuda.mem_get_info()[0]/1024**3)
+    max_memory = f'{free_in_GB-4}GB'
+    #max_memory = '500MB'
+    max_memory = {i: max_memory for i in range(torch.cuda.device_count())}
+    print(torch.cuda.device_count())
     config = AutoConfig.from_pretrained(
         model_args.config_name if model_args.config_name else model_args.model_name_or_path,
         num_labels=num_labels,
@@ -374,7 +408,31 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
         ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
+        load_in_8bit=data_args.bits == 8,
+        load_in_4bit=data_args.bits == 4,
+        device_map='auto',
+        max_memory=max_memory,
+        #torch_dtype=torch.bfloat16
     )
+    #setattr(model, 'model_parallel', True)
+    #setattr(model, 'is_parallelizable', True)
+    class CastOutputToFloat(torch.nn.Sequential):
+      def forward(self, x): return super().forward(x).to(torch.float32)
+
+    def print_trainable_parameters(model):
+        """
+        Prints the number of trainable parameters in the model.
+        """
+        trainable_params = 0
+        all_param = 0
+        for _, param in model.named_parameters():
+            all_param += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+        print(
+            f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
+        )
+
 
     # Preprocessing the raw_datasets
     if data_args.task_name is not None:
@@ -423,6 +481,39 @@ def main():
     elif data_args.task_name is not None and not is_regression:
         model.config.label2id = {l: i for i, l in enumerate(label_list)}
         model.config.id2label = {id: label for label, id in config.label2id.items()}
+
+    from peft import LoraConfig, get_peft_model
+
+    if data_args.lora_modules == 'attn':
+        modules = ['query', 'key', 'value']
+    elif data_args.lora_modules == 'all':
+        modules = ['query', 'key', 'value', 'dense']
+    else:
+        modules = ['dense']
+
+    config = LoraConfig(
+        r=data_args.lora_r,
+        lora_alpha=data_args.lora_alpha,
+        #target_modules=["q_proj", "v_proj", "out_proj", "fc1", "fc2"],
+        #target_modules=["wi"],
+        target_modules=modules,
+        lora_dropout=0.01,
+        bias="lora_only",
+        task_type="SEQ_CLS"
+    )
+
+    if data_args.use_adapter:
+        #model.classifier = CastOutputToFloat(model.classifier)
+        model = get_peft_model(model, config)
+        model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
+    print_trainable_parameters(model)
+
+    if data_args.bits == 4:
+        for name, p in model.named_parameters():
+            if p.dtype == torch.float16:
+                p.data = p.data.to(torch.float32)
+
+    #model.gradient_checkpointing_enable()  # reduce number of stored activations
 
     if data_args.max_seq_length > tokenizer.model_max_length:
         logger.warning(
