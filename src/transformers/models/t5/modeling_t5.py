@@ -1737,8 +1737,12 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
         # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.encoder.first_device)
-            self.lm_head = self.lm_head.to(self.encoder.first_device)
-            sequence_output = sequence_output.to(self.lm_head.weight.device)
+            if isinstance(self.lm_head, torch.nn.Linear):
+                self.lm_head = self.lm_head.to(self.encoder.first_device)
+                sequence_output = sequence_output.to(self.lm_head.weight.device)
+            else:
+                self.lm_head[0] = self.lm_head[0].to(self.encoder.first_device)
+                sequence_output = sequence_output.to(self.lm_head[0].weight.device)
 
         if self.config.tie_word_embeddings:
             # Rescale output before projecting on vocab
