@@ -32,7 +32,6 @@ from ..models.auto import (
     MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING,
     MODEL_FOR_VISION_2_SEQ_MAPPING,
 )
-from ..pytorch_utils import torch_int_div
 from ..utils import ModelOutput, logging
 from .beam_constraints import DisjunctiveConstraint, PhrasalConstraint
 from .beam_search import BeamScorer, BeamSearchScorer, ConstrainedBeamSearchScorer
@@ -483,7 +482,7 @@ class GenerationMixin:
           `constraints!=None` or `force_words_ids!=None`
 
     You do not need to call any of the above methods directly. Pass custom parameter values to 'generate' instead. To
-    learn more about decoding strategies refer to the [text generation strategies guide](./generation_strategies).
+    learn more about decoding strategies refer to the [text generation strategies guide](../generation_strategies).
     """
 
     def prepare_inputs_for_generation(self, *args, **kwargs):
@@ -544,7 +543,7 @@ class GenerationMixin:
                 # In this case, `input_ids` is moved to the `model_kwargs`, so a few automations (like the creation of
                 # the attention mask) can rely on the actual model input.
                 model_kwargs["input_ids"] = self._maybe_initialize_input_ids_for_generation(
-                    inputs, bos_token_id, batch_size=model_kwargs["inputs_embeds"].shape[0]
+                    inputs, bos_token_id, model_kwargs=model_kwargs
                 )
             else:
                 if inputs is not None:
@@ -552,9 +551,7 @@ class GenerationMixin:
             inputs, input_name = model_kwargs["inputs_embeds"], "inputs_embeds"
 
         # 4. if `inputs` is still None, try to create `input_ids` from BOS token
-        inputs = self._maybe_initialize_input_ids_for_generation(
-            inputs, bos_token_id, model_kwargs.get("encoder_outputs")
-        )
+        inputs = self._maybe_initialize_input_ids_for_generation(inputs, bos_token_id, model_kwargs)
         return inputs, input_name, model_kwargs
 
     def adjust_logits_during_generation(self, logits: torch.FloatTensor, **kwargs) -> torch.FloatTensor:
@@ -567,13 +564,13 @@ class GenerationMixin:
         self,
         inputs: Optional[torch.Tensor] = None,
         bos_token_id: Optional[int] = None,
-        encoder_outputs: Optional[ModelOutput] = None,
-        batch_size: Optional[int] = None,
+        model_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ) -> torch.LongTensor:
         """Initializes input ids for generation, if necessary."""
         if inputs is not None:
             return inputs
 
+        encoder_outputs = model_kwargs.get("encoder_outputs")
         if self.config.is_encoder_decoder and encoder_outputs is not None:
             # make dummy input_ids with value -100, as a sanity check ensuring that they won't be used for encoding
             shape = encoder_outputs.last_hidden_state.size()[:-1]
@@ -582,7 +579,13 @@ class GenerationMixin:
         if bos_token_id is None:
             raise ValueError("`bos_token_id` has to be defined when no `input_ids` are provided.")
 
-        batch_size = batch_size if batch_size is not None else 1
+        # If there is some tensor in `model_kwargs`, we can infer the batch size from it. This is helpful with
+        # soft-prompting or in multimodal implementations built on top of decoder-only language models.
+        batch_size = 1
+        for value in model_kwargs.values():
+            if isinstance(value, torch.Tensor):
+                batch_size = value.shape[0]
+                break
         return torch.ones((batch_size, 1), dtype=torch.long, device=self.device) * bos_token_id
 
     def _prepare_attention_mask_for_generation(
@@ -1125,7 +1128,7 @@ class GenerationMixin:
         parameters to generate(), e.g. `.generate(inputs, num_beams=4, do_sample=True)`.
 
         For an overview of generation strategies and code examples, check out the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -1695,7 +1698,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.contrastive_search`] directly. Use
         generate() instead. For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -1801,7 +1804,7 @@ class GenerationMixin:
             )
 
         # keep track of which sequences are already finished
-        unfinished_sequences = input_ids.new(input_ids.shape[0]).fill_(1)
+        unfinished_sequences = torch.ones(input_ids.shape[0], dtype=torch.long, device=input_ids.device)
 
         this_peer_finished = False  # used by synced_gpus only
         batch_size = input_ids.shape[0]
@@ -2053,7 +2056,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.greedy_search`] directly. Use generate()
         instead. For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -2176,7 +2179,7 @@ class GenerationMixin:
             )
 
         # keep track of which sequences are already finished
-        unfinished_sequences = input_ids.new(input_ids.shape[0]).fill_(1)
+        unfinished_sequences = torch.ones(input_ids.shape[0], dtype=torch.long, device=input_ids.device)
 
         this_peer_finished = False  # used by synced_gpus only
         while True:
@@ -2300,7 +2303,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.sample`] directly. Use generate() instead.
         For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -2397,7 +2400,7 @@ class GenerationMixin:
         ... )
 
         >>> tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        ['Today is a beautiful day, and a wonderful day.\n\nI was lucky enough to meet the']
+        ['Today is a beautiful day, and we must do everything possible to make it a day of celebration.']
         ```"""
         # init values
         logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
@@ -2442,7 +2445,7 @@ class GenerationMixin:
             )
 
         # keep track of which sequences are already finished
-        unfinished_sequences = input_ids.new(input_ids.shape[0]).fill_(1)
+        unfinished_sequences = torch.ones(input_ids.shape[0], dtype=torch.long, device=input_ids.device)
 
         this_peer_finished = False  # used by synced_gpus only
         # auto-regressive generation
@@ -2569,7 +2572,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.beam_search`] directly. Use generate()
         instead. For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -2791,7 +2794,7 @@ class GenerationMixin:
                 next_token_scores, 2 * num_beams, dim=1, largest=True, sorted=True
             )
 
-            next_indices = torch_int_div(next_tokens, vocab_size)
+            next_indices = torch.div(next_tokens, vocab_size, rounding_mode="floor")
             next_tokens = next_tokens % vocab_size
 
             # stateless
@@ -2893,7 +2896,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.beam_sample`] directly. Use generate()
         instead. For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -3125,7 +3128,7 @@ class GenerationMixin:
             next_token_scores, _indices = torch.sort(next_token_scores, descending=True, dim=1)
             next_tokens = torch.gather(next_tokens, -1, _indices)
 
-            next_indices = torch_int_div(next_tokens, vocab_size)
+            next_indices = torch.div(next_tokens, vocab_size, rounding_mode="floor")
             next_tokens = next_tokens % vocab_size
 
             # stateless
@@ -3225,7 +3228,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.group_beam_search`] directly. Use
         generate() instead. For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 
@@ -3469,7 +3472,7 @@ class GenerationMixin:
                     next_token_scores, 2 * group_size, dim=1, largest=True, sorted=True
                 )
 
-                next_indices = torch_int_div(next_tokens, vocab_size)
+                next_indices = torch.div(next_tokens, vocab_size, rounding_mode="floor")
                 next_tokens = next_tokens % vocab_size
 
                 # stateless
@@ -3499,7 +3502,9 @@ class GenerationMixin:
                 # (beam_idx // group_size) -> batch_idx
                 # (beam_idx % group_size) -> offset of idx inside the group
                 reordering_indices[batch_group_indices] = (
-                    num_beams * torch_int_div(beam_idx, group_size) + group_start_idx + (beam_idx % group_size)
+                    num_beams * torch.div(beam_idx, group_size, rounding_mode="floor")
+                    + group_start_idx
+                    + (beam_idx % group_size)
                 )
 
             # Store scores, attentions and hidden_states when required
@@ -3603,7 +3608,7 @@ class GenerationMixin:
 
         In most cases, you do not need to call [`~generation.GenerationMixin.constrained_beam_search`] directly. Use
         generate() instead. For an overview of generation strategies and code examples, check the [following
-        guide](./generation_strategies).
+        guide](../generation_strategies).
 
         </Tip>
 

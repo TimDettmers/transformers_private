@@ -1480,7 +1480,7 @@ class GenerationTesterMixin:
 
             signature = inspect.signature(model.forward)
             # We want to test only models where encoder/decoder head masking is implemented
-            if not set(head_masking.keys()) < set([*signature.parameters.keys()]):
+            if not set(head_masking.keys()) < {*signature.parameters.keys()}:
                 continue
 
             for attn_name, (name, mask) in zip(attention_names, head_masking.items()):
@@ -2450,7 +2450,7 @@ class GenerationIntegrationTests(unittest.TestCase, GenerationIntegrationTestsMi
             "top_k": 10,
             "temperature": 0.7,
         }
-        expectation = 15
+        expectation = 20
 
         tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-gpt2")
         text = """Hello, my dog is cute and"""
