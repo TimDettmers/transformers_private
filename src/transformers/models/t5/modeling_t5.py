@@ -288,7 +288,6 @@ class T5DenseActDense(nn.Module):
         hidden_states = self.wi(hidden_states)
         hidden_states = self.act(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        if hidden_states.dtype != self.wo.weight.dtype and self.wo.weight.dtype != torch.int8 and self.wo.weight.dtype != torch.uint8:
         if (
             isinstance(self.wo.weight, torch.Tensor)
             and hidden_states.dtype != self.wo.weight.dtype
@@ -318,7 +317,6 @@ class T5DenseGatedActDense(nn.Module):
         # To make 8bit quantization work for google/flan-t5-xxl, self.wo is kept in float32.
         # See https://github.com/huggingface/transformers/issues/20287
         # we also make sure the weights are not in `int8` in case users will force `_keep_in_fp32_modules` to be `None``
-        if hidden_states.dtype != self.wo.weight.dtype and self.wo.weight.dtype != torch.int8 and self.wo.weight.dtype != torch.uint8:
         if (
             isinstance(self.wo.weight, torch.Tensor)
             and hidden_states.dtype != self.wo.weight.dtype
@@ -1737,8 +1735,12 @@ class T5ForConditionalGeneration(T5PreTrainedModel):
         # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.encoder.first_device)
-            self.lm_head = self.lm_head.to(self.encoder.first_device)
-            sequence_output = sequence_output.to(self.lm_head.weight.device)
+            if isinstance(self.lm_head, torch.nn.Linear):
+                self.lm_head = self.lm_head.to(self.encoder.first_device)
+                sequence_output = sequence_output.to(self.lm_head.weight.device)
+            else:
+                self.lm_head[0] = self.lm_head[0].to(self.encoder.first_device)
+                sequence_output = sequence_output.to(self.lm_head[0].weight.device)
 
         if self.config.tie_word_embeddings:
             # Rescale output before projecting on vocab

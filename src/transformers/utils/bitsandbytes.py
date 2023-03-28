@@ -128,16 +128,7 @@ def replace_8bit_linear(
     for name, module in model.named_children():
         if current_key_name is None:
             current_key_name = []
-        current_key_name.append(name)
-
-        if len(list(module.children())) > 0:
-            replace_8bit_linear(
-                module,
-                threshold,
-                modules_to_not_convert,
-                current_key_name,
-                quantization_config,
-            )
+        # current_key_name.append(name)
 
         if isinstance(module, nn.Linear) and name not in modules_to_not_convert:
             # Check if the current key is not in the `modules_to_not_convert`
@@ -164,7 +155,16 @@ def replace_8bit_linear(
 
                             )
         # Remove the last key for recursion
-        current_key_name.pop(-1)
+        # current_key_name.pop(-1)
+
+        if len(list(module.children())) > 0:
+            replace_8bit_linear(
+                module,
+                threshold,
+                modules_to_not_convert,
+                current_key_name,
+                quantization_config,
+            )
     return model
 
 
