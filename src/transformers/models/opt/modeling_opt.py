@@ -38,6 +38,8 @@ from ...utils import (
 )
 from .configuration_opt import OPTConfig
 
+from outliers.utils import weight_analysis
+
 
 logger = logging.get_logger(__name__)
 
@@ -807,6 +809,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.model = OPTModel(config)
+        self.did_analysis = False
 
         # the lm_head weight is automatically tied to the embed tokens weight
         self.lm_head = nn.Linear(config.word_embed_proj_dim, config.vocab_size, bias=False)
@@ -919,6 +922,9 @@ class OPTForCausalLM(OPTPreTrainedModel):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you consciours? Can you talk to me?\nI'm not consciours, but I can talk to you."
         ```"""
+        if self.did_analysis == False:
+            self.did_analysis = True
+            weight_analysis(self.model)
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (

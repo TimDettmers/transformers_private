@@ -237,7 +237,7 @@ def main():
         # let's parse it to get our arguments.
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args, remaining_args = parser.parse_args_into_dataclasses(return_remaining_strings=True)
 
     print(data_args)
     print(training_args)
@@ -511,6 +511,12 @@ def main():
         model = get_peft_model(model, config)
         model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
     print_trainable_parameters(model)
+
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear):
+            p = module.weight
+            if p.dtype not in [torch.uint8, torch.int8]:
+                print(name, p.shape, p.dtype)
 
     if data_args.bits == 4:
         for name, p in model.named_parameters():

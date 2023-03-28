@@ -52,6 +52,12 @@ class BitsAndBytesConfig:
             your model in different parts and run some parts in int8 on GPU and some parts in fp32 on CPU, you can use
             this flag. This is useful for offloading large models such as `google/flan-t5-xxl`. Note that the int8
             operations will not be run on CPU.
+        llm_int8_has_fp16_weight (`bool`, *optional*, defaults to `False`):
+            This flag runs LLM.int8() with 16-bit main weights. This is useful for fine-tuning as the weights do not
+            have to be converted back and forth for the backward pass.
+        fp4_compute_dtype (`torch.dtype`, *optional*, defaults to `None`):
+            This sets the computational type which might be different than the input time. For example, inputs might
+            be fp32, but computation can be set to bf16 for speedups.
     """
 
     def __init__(
@@ -61,12 +67,17 @@ class BitsAndBytesConfig:
         llm_int8_threshold=6.0,
         llm_int8_skip_modules=None,
         llm_int8_enable_fp32_cpu_offload=False,
+        llm_int8_has_fp16_weight=False,
+        fp4_compute_dtype=None
     ):
         self.load_in_8bit = load_in_8bit
         self.load_in_4bit = load_in_4bit
         self.llm_int8_threshold = llm_int8_threshold
         self.llm_int8_skip_modules = llm_int8_skip_modules
         self.llm_int8_enable_fp32_cpu_offload = llm_int8_enable_fp32_cpu_offload
+        self.llm_int8_has_fp16_weight = llm_int8_has_fp16_weight
+        self.fp4_compute_dtype = fp4_compute_dtype
+
 
         self.post_init()
 
@@ -82,6 +93,12 @@ class BitsAndBytesConfig:
 
         if not isinstance(self.llm_int8_enable_fp32_cpu_offload, bool):
             raise ValueError("llm_int8_enable_fp32_cpu_offload must be a boolean")
+
+        if not isinstance(self.llm_int8_has_fp16_weight, bool):
+            raise ValueError("llm_int8_has_fp16_weight must be a boolean")
+
+        if self.fp4_compute_dtype is not None and not isinstance(self.fp4_compute_dtype, torch.dtype):
+            raise ValueError("fp4_compute_dtype must be torch.dtype")
 
     def is_quantizable(self):
         r"""

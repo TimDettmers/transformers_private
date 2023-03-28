@@ -32,6 +32,8 @@ from ...modeling_utils import PreTrainedModel
 from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from .configuration_llama import LlamaConfig
 
+#from outliers.utils import weight_analysis
+
 
 logger = logging.get_logger(__name__)
 
@@ -208,6 +210,7 @@ class LlamaAttention(nn.Module):
 
         query_states = self.q_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        #print(hidden_states.abs().max(), 'pre_v')
         value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
@@ -225,6 +228,7 @@ class LlamaAttention(nn.Module):
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
+
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -255,6 +259,7 @@ class LlamaAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2)
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
+        #print(attn_output.abs().max(), 'pre_out')
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -652,6 +657,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         self.model = LlamaModel(config)
 
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.did_analysis = False
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -755,6 +761,10 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         "Hey, are you consciours? Can you talk to me?\nI'm not consciours, but I can talk to you."
         ```"""
 
+        #if self.did_analysis is False:
+            #self.did_analysis = True
+            #weight_analysis(self.model)
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -783,6 +793,8 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
+            if shift_labels.device.index != shift_logits.device:
+                shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1))
 
         if not return_dict:

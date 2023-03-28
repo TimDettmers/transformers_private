@@ -2591,6 +2591,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             else:
                 device_map_dtype = "int8"  # TODO find a way here?
 
+
             device_map = infer_auto_device_map(
                 model,
                 no_split_module_classes=no_split_modules,

@@ -50,11 +50,12 @@ def set_module_8bit_tensor_to_device(module, tensor_name, device, value=None):
 
     if is_buffer:
         has_fp16_weights = None
+        is_fp4 = False
     else:
         has_fp16_weights = getattr(module._parameters[tensor_name], "has_fp16_weights", None)
         if has_fp16_weights is None:
             has_fp16_weights = getattr(module._parameters[tensor_name], "quant_state", None)
-    is_fp4 = isinstance(module._parameters[tensor_name], bnb.nn.FP4Params)
+        is_fp4 = isinstance(module._parameters[tensor_name], bnb.nn.FP4Params)
 
     if has_fp16_weights is not None or is_fp4:
         param = module._parameters[tensor_name]
@@ -147,15 +148,21 @@ def replace_8bit_linear(
                             module.in_features,
                             module.out_features,
                             module.bias is not None,
-                            has_fp16_weights=False,
+                            has_fp16_weights=quantization_config.llm_int8_has_fp16_weight,
                             threshold=threshold,
                         )
                     else:
-                        model._modules[name] = bnb.nn.LinearFP4(
-                            module.in_features,
-                            module.out_features,
-                            module.bias is not None,
-                        )
+                        if quantization_config.llm_int8_skip_modules is not None and name in quantization_config.llm_int8_skip_modules:
+                            pass
+                        else:
+
+                            model._modules[name] = bnb.nn.LinearFP4(
+                                module.in_features,
+                                module.out_features,
+                                module.bias is not None,
+                                quantization_config.fp4_compute_dtype
+
+                            )
         # Remove the last key for recursion
         current_key_name.pop(-1)
     return model
