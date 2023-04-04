@@ -32,7 +32,7 @@ class BitsAndBytesConfig:
         load_in_8bit (`bool`, *optional*, defaults to `False`):
             This flag is used to enable 8-bit quantization with LLM.int8().
         load_in_4bit (`bool`, *optional*, defaults to `False`):
-            This flag is used to enable 4-bit quantization by replacing the Linear layers with FP4 layers from
+            This flag is used to enable 4-bit quantization by replacing the Linear layers with FP4/NF4 layers from
             `bitsandbytes`.
         llm_int8_threshold (`float`, *optional*, defaults to 6):
             This corresponds to the outlier threshold for outlier detection as described in `LLM.int8() : 8-bit Matrix
@@ -58,6 +58,12 @@ class BitsAndBytesConfig:
         fp4_compute_dtype (`torch.dtype`, *optional*, defaults to `None`):
             This sets the computational type which might be different than the input time. For example, inputs might
             be fp32, but computation can be set to bf16 for speedups.
+        bnb_4bit_quant_type (`str`, {fp4, fn4}, defaults to `fp4`):
+            This sets the quantization data type in the bnb.nn.Linear4Bit layers. Options are FP4 and NF4 data types
+            which are specified by `fp4` or `fn4`.
+        bnb_4bit_compress_statistics (`bool`, *optional*, defaults to `False`):
+            This flag is used for nested quantization where the quantization constants from the first quantization
+            are quantized again.
     """
 
     def __init__(
@@ -68,7 +74,9 @@ class BitsAndBytesConfig:
         llm_int8_skip_modules=None,
         llm_int8_enable_fp32_cpu_offload=False,
         llm_int8_has_fp16_weight=False,
-        fp4_compute_dtype=None
+        fp4_compute_dtype=None,
+        bnb_4bit_quant_type='fp4',
+        bnb_4bit_compress_statistics=False
     ):
         self.load_in_8bit = load_in_8bit
         self.load_in_4bit = load_in_4bit
@@ -77,6 +85,8 @@ class BitsAndBytesConfig:
         self.llm_int8_enable_fp32_cpu_offload = llm_int8_enable_fp32_cpu_offload
         self.llm_int8_has_fp16_weight = llm_int8_has_fp16_weight
         self.fp4_compute_dtype = fp4_compute_dtype
+        self.bnb_4bit_quant_type = bnb_4bit_quant_type
+        self.bnb_4bit_compress_statistics = bnb_4bit_compress_statistics
 
 
         self.post_init()
@@ -100,6 +110,12 @@ class BitsAndBytesConfig:
         if self.fp4_compute_dtype is not None and not isinstance(self.fp4_compute_dtype, torch.dtype):
             raise ValueError("fp4_compute_dtype must be torch.dtype")
 
+        if not isinstance(self.bnb_4bit_quant_type, str):
+            raise ValueError("bnb_4bit_quant_type must be a string")
+
+        if not isinstance(self.bnb_4bit_compress_statistics, bool):
+            raise ValueError("bnb_4bit_compress_statistics must be a boolean")
+
     def is_quantizable(self):
         r"""
         Returns `True` if the model is quantizable, `False` otherwise.
@@ -113,8 +129,10 @@ class BitsAndBytesConfig:
         """
         if self.load_in_8bit:
             return "llm_int8"
-        elif self.load_in_4bit:
+        elif self.load_in_4bit and self.bnb_4bit_quant_type == 'fp4':
             return "fp4"
+        elif self.load_in_4bit and self.bnb_4bit_quant_type == 'nf4':
+            return "nf4"
         else:
             return None
 

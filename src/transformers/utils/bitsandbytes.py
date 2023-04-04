@@ -50,14 +50,14 @@ def set_module_8bit_tensor_to_device(module, tensor_name, device, value=None):
 
     if is_buffer:
         has_fp16_weights = None
-        is_fp4 = False
+        is_4bit = False
     else:
         has_fp16_weights = getattr(module._parameters[tensor_name], "has_fp16_weights", None)
         if has_fp16_weights is None:
             has_fp16_weights = getattr(module._parameters[tensor_name], "quant_state", None)
-        is_fp4 = isinstance(module._parameters[tensor_name], bnb.nn.FP4Params)
+        is_4bit = isinstance(module._parameters[tensor_name], bnb.nn.Params4bit)
 
-    if has_fp16_weights is not None or is_fp4:
+    if has_fp16_weights is not None or is_4bit:
         param = module._parameters[tensor_name]
         if param.device.type != "cuda":
             if value is None:
@@ -71,12 +71,14 @@ def set_module_8bit_tensor_to_device(module, tensor_name, device, value=None):
                     )
             else:
                 new_value = torch.tensor(value, device="cpu")
+
             if has_fp16_weights is not None:
                 new_value = bnb.nn.Int8Params(new_value, requires_grad=False, has_fp16_weights=has_fp16_weights).to(
                     device
                 )
-            elif is_fp4:
-                new_value = bnb.nn.FP4Params(new_value, requires_grad=False).to(device)
+            elif is_4bit:
+                kwargs = old_value.__dict__
+                new_value = bnb.nn.Params4bit(new_value, requires_grad=False, **kwargs).to(device)
             module._parameters[tensor_name] = new_value
     else:
         if value is None:
@@ -146,13 +148,13 @@ def replace_8bit_linear(
                         if quantization_config.llm_int8_skip_modules is not None and name in quantization_config.llm_int8_skip_modules:
                             pass
                         else:
-
-                            model._modules[name] = bnb.nn.LinearFP4(
+                            model._modules[name] = bnb.nn.Linear4bit(
                                 module.in_features,
                                 module.out_features,
                                 module.bias is not None,
-                                quantization_config.fp4_compute_dtype
-
+                                quantization_config.fp4_compute_dtype,
+                                compress_statistics=quantization_config.bnb_4bit_compress_statistics,
+                                quant_type=quantization_config.bnb_4bit_quant_type
                             )
         # Remove the last key for recursion
         # current_key_name.pop(-1)

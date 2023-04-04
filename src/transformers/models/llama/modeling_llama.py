@@ -21,6 +21,7 @@
 import math
 from typing import List, Optional, Tuple, Union
 
+import importlib
 import torch
 import torch.utils.checkpoint
 from torch import nn
@@ -32,7 +33,21 @@ from ...modeling_utils import PreTrainedModel
 from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from .configuration_llama import LlamaConfig
 
-#from outliers.utils import weight_analysis
+from outliers.utils import weight_analysis
+
+def is_xformers_available():
+    return importlib.util.find_spec("xformers") is not None
+
+if is_xformers_available():
+    import xformers
+    from xformers.ops import memory_efficient_attention
+
+def is_apex_available():
+    return importlib.util.find_spec("apex") is not None
+
+if is_apex_available():
+    import apex
+
 
 
 logger = logging.get_logger(__name__)
@@ -70,13 +85,14 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 
 
 class LlamaRMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6):
+    def __init__(self, hidden_size, eps=1e-6, output_dtype=torch.float32):
         """
         LlamaRMSNorm is equivalent to T5LayerNorm
         """
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
+        self.output_dtype = output_dtype
 
     def forward(self, hidden_states):
         variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
@@ -86,7 +102,13 @@ class LlamaRMSNorm(nn.Module):
         if self.weight.dtype in [torch.float16, torch.bfloat16]:
             hidden_states = hidden_states.to(self.weight.dtype)
 
-        return self.weight * hidden_states
+
+        hidden_states = self.weight * hidden_states
+
+        if self.output_dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.output_dtype)
+
+        return hidden_states
 
 
 class LlamaRotaryEmbedding(torch.nn.Module):
@@ -147,11 +169,10 @@ class LlamaMLP(nn.Module):
         self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
         self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
         self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
-        self.act_fn = ACT2FN[hidden_act]
+        self.act_fn = torch.nn.SiLU(True)
 
     def forward(self, x):
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-
 
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -210,7 +231,6 @@ class LlamaAttention(nn.Module):
 
         query_states = self.q_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = self.k_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        #print(hidden_states.abs().max(), 'pre_v')
         value_states = self.v_proj(hidden_states).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
@@ -222,44 +242,50 @@ class LlamaAttention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, offset=offset)
         # [bsz, nh, t, hd]
 
-        if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+        if self.training and is_xformers_available():
+            attn_output = memory_efficient_attention(query_states.permute([0, 2, 1, 3]),
+                                                        key_states.permute([0, 2, 1, 3]),
+                                                      value_states.permute([0, 2, 1, 3]),
+                                                      attn_bias=xformers.ops.fmha.attn_bias.LowerTriangularMask())
+            attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        else:
+            if past_key_value is not None:
+                # reuse k, v, self_attention
+                key_states = torch.cat([past_key_value[0], key_states], dim=2)
+                value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
-        past_key_value = (key_states, value_states) if use_cache else None
+            past_key_value = (key_states, value_states) if use_cache else None
 
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz * self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    f"Attention weights should be of size {(bsz * self.num_heads, q_len, kv_seq_len)}, but is"
+                    f" {attn_weights.size()}"
                 )
-            attn_weights = attn_weights + attention_mask
-            attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
+            if attention_mask is not None:
+                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                    raise ValueError(
+                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                    )
+                attn_weights = attn_weights + attention_mask
+                attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
+            # upcast attention to fp32
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_output = torch.matmul(attn_weights, value_states)
 
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+            if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
+                raise ValueError(
+                    f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
+                    f" {attn_output.size()}"
+                )
 
-        #print(attn_output.abs().max(), 'pre_out')
+            attn_output = attn_output.transpose(1, 2)
+            attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -281,8 +307,12 @@ class LlamaDecoderLayer(nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
         )
-        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        if is_apex_available():
+            self.input_layernorm = apex.normalization.FusedRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            self.post_attention_layernorm = apex.normalization.FusedRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        else:
+            self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
+            self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
 
     def forward(
         self,
@@ -305,12 +335,17 @@ class LlamaDecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
+        def create_ckpt_forward(module):
+            def forward(*inputs):
+                # None for past_key_value
+                return module(*inputs)
+
+            return forward
 
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
 
-        # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
             past_key_value=past_key_value,
@@ -324,6 +359,8 @@ class LlamaDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
+
+
         hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
@@ -460,7 +497,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
-        self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=self.config.torch_dtype)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
@@ -581,6 +618,7 @@ class LlamaModel(LlamaPreTrainedModel):
         )
 
         hidden_states = inputs_embeds
+        hidden_states = hidden_states.to(self.config.torch_dtype)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -762,8 +800,8 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         ```"""
 
         #if self.did_analysis is False:
-            #self.did_analysis = True
-            #weight_analysis(self.model)
+        #    self.did_analysis = True
+        #    weight_analysis(self.model)
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
