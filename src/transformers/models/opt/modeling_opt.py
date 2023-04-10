@@ -38,7 +38,7 @@ from ...utils import (
 )
 from .configuration_opt import OPTConfig
 
-from outliers.utils import weight_analysis
+# from outliers.utils import weight_analysis
 
 
 logger = logging.get_logger(__name__)
@@ -924,7 +924,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
         ```"""
         if self.did_analysis == False:
             self.did_analysis = True
-            weight_analysis(self.model)
+            # weight_analysis(self.model)
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
