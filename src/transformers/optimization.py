@@ -417,6 +417,7 @@ class AdamW(Optimizer):
         if closure is not None:
             loss = closure()
 
+        has_inf = False
         for group in self.param_groups:
             for p in group["params"]:
                 if p.grad is None:
@@ -424,6 +425,13 @@ class AdamW(Optimizer):
                 grad = p.grad.data
                 if grad.is_sparse:
                     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
+                if torch.any(torch.isnan(grad) | torch.isinf(grad)):
+                    if not has_inf:
+                        n = (torch.isnan(grad) == 1).sum()
+                        print(n/grad.numel(), 'percentage nan')
+                        print('skipping grad due to inf/nan', grad.shape, grad.dtype)
+                        has_inf = True
+                    continue
 
                 state = self.state[p]
 
@@ -442,11 +450,14 @@ class AdamW(Optimizer):
 
                 # Decay the first and second moment running average coefficient
                 # In-place operations to update the averages at the same time
+                eps = group['eps']
+                #rms = grad.pow(2)/torch.max(exp_avg_sq, eps*eps*torch.ones_like(exp_avg_sq))
                 exp_avg.mul_(beta1).add_(grad, alpha=(1.0 - beta1))
                 exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
                 denom = exp_avg_sq.sqrt().add_(group["eps"])
 
                 step_size = group["lr"]
+                #step_size *= (1. / max(1., rms.mean().sqrt().item() / 1 ))
                 if group["correct_bias"]:  # No bias correction for Bert
                     bias_correction1 = 1.0 - beta1 ** state["step"]
                     bias_correction2 = 1.0 - beta2 ** state["step"]

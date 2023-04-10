@@ -36,19 +36,37 @@ from .configuration_llama import LlamaConfig
 from outliers.utils import weight_analysis
 
 def is_xformers_available():
-    return importlib.util.find_spec("xformers") is not None
+    #return importlib.util.find_spec("xformers") is not None
+    return False
 
 if is_xformers_available():
     import xformers
     from xformers.ops import memory_efficient_attention
 
 def is_apex_available():
-    return importlib.util.find_spec("apex") is not None
+    #return importlib.util.find_spec("apex") is not None
+    return False
 
 if is_apex_available():
     import apex
 
 
+def count_nans(A, text):
+    if torch.any(torch.isnan(A) | torch.isinf(A)):
+        n = torch.isnan(A).sum()
+        n2 = torch.isinf(A).sum()
+        print(text, n/A.numel(), n2/A.numel())
+
+def replace_nan(A, replacement_value=0.0):
+    idx = torch.isnan(A)
+    if idx.sum() < idx.numel():
+        # only replace if we have an occasional
+        # denormal underflow. Otherwise, we have something
+        # else exploding
+        A[idx] = replacement_value
+    else:
+        print('no replacement', idx.sum()/idx.numel())
+    return A
 
 logger = logging.get_logger(__name__)
 
@@ -172,6 +190,11 @@ class LlamaMLP(nn.Module):
         self.act_fn = torch.nn.SiLU(True)
 
     def forward(self, x):
+        #up = self.up_proj(x)
+        #up2 = self.act_fn(self.gate_proj(x))
+        #out = self.down_proj(up2* up)
+        #return out
+
         return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
 class LlamaAttention(nn.Module):
@@ -242,7 +265,8 @@ class LlamaAttention(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, offset=offset)
         # [bsz, nh, t, hd]
 
-        if self.training and is_xformers_available():
+        #if self.training and is_xformers_available():
+        if is_xformers_available():
             attn_output = memory_efficient_attention(query_states.permute([0, 2, 1, 3]),
                                                         key_states.permute([0, 2, 1, 3]),
                                                       value_states.permute([0, 2, 1, 3]),
@@ -256,6 +280,10 @@ class LlamaAttention(nn.Module):
 
             past_key_value = (key_states, value_states) if use_cache else None
 
+            inp_dtype = query_states.dtype
+            query_states = query_states.float()
+            key_states = key_states.float()
+            value_states = value_states.float()
 
             attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -286,6 +314,8 @@ class LlamaAttention(nn.Module):
             attn_output = attn_output.transpose(1, 2)
             attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
+            attn_output = attn_output.to(inp_dtype)
+
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -307,12 +337,14 @@ class LlamaDecoderLayer(nn.Module):
             intermediate_size=config.intermediate_size,
             hidden_act=config.hidden_act,
         )
-        if is_apex_available():
-            self.input_layernorm = apex.normalization.FusedRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-            self.post_attention_layernorm = apex.normalization.FusedRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        else:
-            self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
-            self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
+        #if is_apex_available():
+        #    self.input_layernorm = apex.normalization.FusedRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        #    self.post_attention_layernorm = apex.normalization.FusedRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        #else:
+        #    self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
+        #    self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
+        self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
+        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps, output_dtype=config.torch_dtype)
 
     def forward(
         self,
@@ -344,7 +376,9 @@ class LlamaDecoderLayer(nn.Module):
 
         residual = hidden_states
 
+
         hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = replace_nan(hidden_states) # this layer norm is unstable in 65B models
 
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -618,7 +652,10 @@ class LlamaModel(LlamaPreTrainedModel):
         )
 
         hidden_states = inputs_embeds
-        hidden_states = hidden_states.to(self.config.torch_dtype)
+        if isinstance(self.config.torch_dtype, str) and self.config.torch_dtype == 'bfloat16':
+            hidden_states = hidden_states.to(torch.bfloat16)
+        else:
+            hidden_states = hidden_states.to(self.config.torch_dtype)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:

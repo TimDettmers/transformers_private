@@ -1621,7 +1621,8 @@ class Trainer:
             if resume_from_checkpoint is None:
                 raise ValueError(f"No valid checkpoint found in output directory ({args.output_dir})")
 
-        if resume_from_checkpoint is not None and not is_sagemaker_mp_enabled() and args.deepspeed is None:
+        if (resume_from_checkpoint is not None and not is_sagemaker_mp_enabled() and args.deepspeed is None and
+           not args.skip_loading_checkpoint_weights):
             self._load_from_checkpoint(resume_from_checkpoint)
 
         # If model was re-initialized, put it on the right device and update self.model_wrapped
