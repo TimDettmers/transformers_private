@@ -500,6 +500,10 @@ class TrainingArguments:
             The path to a folder with a valid checkpoint for your model. This argument is not directly used by
             [`Trainer`], it's intended to be used by your training/evaluation scripts instead. See the [example
             scripts](https://github.com/huggingface/transformers/tree/main/examples) for more details.
+        skip_loading_checkpoint_weights (`bool` *optional*):
+            Skips loading the checkpoint weights and only loads the trainer state. This can be useful for PEFT models
+            where the training is resumed from a frozen model with trained PEFT model. PEFT weights are usually
+            loaded with PeftModel.from_pretrained(base_model, checkpoint_dir).
         hub_model_id (`str`, *optional*):
             The name of the repository to keep in sync with the local *output_dir*. It can be a simple model ID in
             which case the model will be pushed in your namespace. Otherwise it should be the whole repository name,
@@ -999,6 +1003,9 @@ class TrainingArguments:
     resume_from_checkpoint: Optional[str] = field(
         default=None,
         metadata={"help": "The path to a folder with a valid checkpoint for your model."},
+    )
+    skip_loading_checkpoint_weights: bool = field(
+        default=False, metadata={"help": "Whether to skip loading the checkpoint weights and only load the trainer state."}
     )
     hub_model_id: Optional[str] = field(
         default=None, metadata={"help": "The name of the repository to keep in sync with the local `output_dir`."}
