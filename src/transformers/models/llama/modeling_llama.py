@@ -33,7 +33,7 @@ from ...modeling_utils import PreTrainedModel
 from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from .configuration_llama import LlamaConfig
 
-from outliers.utils import weight_analysis
+# from outliers.utils import weight_analysis
 
 def is_xformers_available():
     #return importlib.util.find_spec("xformers") is not None
