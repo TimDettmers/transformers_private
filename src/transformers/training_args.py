@@ -53,7 +53,7 @@ from .utils import (
     logging,
     requires_backends,
 )
-
+from .generation.configuration_utils import GenerationConfig
 
 if is_torch_available():
     import torch
@@ -1899,6 +1899,8 @@ class TrainingArguments:
                 d[k] = [x.value for x in v]
             if k.endswith("_token"):
                 d[k] = f"<{k.upper()}>"
+            if isinstance(v, GenerationConfig):
+                d[k] = v.to_dict()
         return d
 
     def to_json_string(self):

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from tqdm.auto import tqdm
-
+from peft import PeftModel
 
 # Integrations must be imported before ML frameworks:
 # isort: off
@@ -2791,7 +2791,6 @@ class Trainer:
         if xm.is_master_ordinal():
             os.makedirs(output_dir, exist_ok=True)
             torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
-
         # Save a trained model and configuration using `save_pretrained()`.
         # They can then be reloaded using `from_pretrained()`
         xm.rendezvous("saving_checkpoint")
@@ -2819,7 +2818,7 @@ class Trainer:
         logger.info(f"Saving model checkpoint to {output_dir}")
         # Save a trained model and configuration using `save_pretrained()`.
         # They can then be reloaded using `from_pretrained()`
-        if not isinstance(self.model, PreTrainedModel):
+        if not isinstance(self.model, (PreTrainedModel, PeftModel)):
             if isinstance(unwrap_model(self.model), PreTrainedModel):
                 if state_dict is None:
                     state_dict = self.model.state_dict()

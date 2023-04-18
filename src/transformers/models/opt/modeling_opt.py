@@ -38,7 +38,7 @@ from ...utils import (
 )
 from .configuration_opt import OPTConfig
 
-from outliers.utils import weight_analysis
+# from outliers.utils import weight_analysis
 
 
 logger = logging.get_logger(__name__)
