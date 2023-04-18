@@ -35,9 +35,12 @@ from .configuration_llama import LlamaConfig
 
 from outliers.utils import weight_analysis
 
+if importlib.util.find_spec("xformers") is not None:
+    print('running with xformers')
+
 def is_xformers_available():
-    #return importlib.util.find_spec("xformers") is not None
-    return False
+    return importlib.util.find_spec("xformers") is not None
+    #return False
 
 if is_xformers_available():
     import xformers
@@ -267,10 +270,17 @@ class LlamaAttention(nn.Module):
 
         #if self.training and is_xformers_available():
         if is_xformers_available():
+            num_pad = 8 - attention_mask.shape[-1] % 8
+            if num_pad != 8:
+                padded_mask = torch.nn.functional.pad(attention_mask, (0, num_pad), 'constant', 0)
+            else:
+                padded_mask = attention_mask
+            padded_mask = torch.tile(padded_mask, (1, query_states.shape[1], 1, 1))
             attn_output = memory_efficient_attention(query_states.permute([0, 2, 1, 3]),
                                                         key_states.permute([0, 2, 1, 3]),
                                                       value_states.permute([0, 2, 1, 3]),
-                                                      attn_bias=xformers.ops.fmha.attn_bias.LowerTriangularMask())
+                                                     #attn_bias=xformers.ops.fmha.attn_bias.LowerTriangularMask())
+                                                     attn_bias=padded_mask[:, :, :, :attention_mask.shape[-1]])
             attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
         else:
             if past_key_value is not None:
@@ -378,7 +388,7 @@ class LlamaDecoderLayer(nn.Module):
 
 
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = replace_nan(hidden_states) # this layer norm is unstable in 65B models
+        #hidden_states = replace_nan(hidden_states) # this layer norm is unstable in 65B models
 
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -654,6 +664,8 @@ class LlamaModel(LlamaPreTrainedModel):
         hidden_states = inputs_embeds
         if isinstance(self.config.torch_dtype, str) and self.config.torch_dtype == 'bfloat16':
             hidden_states = hidden_states.to(torch.bfloat16)
+        elif isinstance(self.config.torch_dtype, str) and self.config.torch_dtype == 'float32':
+            hidden_states = hidden_states.to(torch.float32)
         else:
             hidden_states = hidden_states.to(self.config.torch_dtype)
 
