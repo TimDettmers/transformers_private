@@ -1284,11 +1284,10 @@ class GenerationMixin:
         input_ids_seq_length = input_ids.shape[-1]
         has_default_max_length = kwargs.get("max_length") is None and generation_config.max_length is not None
         if has_default_max_length and generation_config.max_new_tokens is None:
-            warnings.warn(
+            logger.warn(
                 f"Using `max_length`'s default ({generation_config.max_length}) to control the generation length. "
                 "This behaviour is deprecated and will be removed from the config in v5 of Transformers -- we"
                 " recommend using `max_new_tokens` to control the maximum length of the generation.",
-                UserWarning,
             )
         elif generation_config.max_new_tokens is not None:
             generation_config.max_length = generation_config.max_new_tokens + input_ids_seq_length
@@ -1298,7 +1297,6 @@ class GenerationMixin:
                     f"{generation_config.max_length}) seem to have been set. `max_new_tokens` will take precedence. "
                     "Please refer to the documentation for more information. "
                     "(https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)",
-                    UserWarning,
                 )
 
         if generation_config.min_length is not None and generation_config.min_length > generation_config.max_length:

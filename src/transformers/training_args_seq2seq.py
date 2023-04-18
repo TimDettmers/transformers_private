@@ -14,8 +14,10 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Union
 
+from .generation.configuration_utils import GenerationConfig
 from .training_args import TrainingArguments
 from .utils import add_start_docstrings
 
@@ -64,5 +66,11 @@ class Seq2SeqTrainingArguments(TrainingArguments):
                 "The `num_beams` to use on each evaluation loop when `predict_with_generate=True`. Will default "
                 "to the `num_beams` value of the model configuration."
             )
+        },
+    )
+    generation_config: Optional[Union[str, Path, GenerationConfig]] = field(
+        default=None,
+        metadata={
+            "help": "Model id, file path or url pointing to a GenerationConfig json file, to use during prediction."
         },
     )
