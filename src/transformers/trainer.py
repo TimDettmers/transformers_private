@@ -1146,12 +1146,19 @@ class Trainer:
                 optimizer_kwargs.update(adam_kwargs)
             except ImportError:
                 raise ValueError("Trainer tried to instantiate apex FusedAdam but apex is not installed!")
-        elif args.optim == OptimizerNames.ADAMW_BNB:
+        elif args.optim in [OptimizerNames.ADAMW_BNB, OptimizerNames.PAGED_ADAMW, OptimizerNames.PAGED_ADAMW_BNB]:
             try:
-                from bitsandbytes.optim import Adam8bit
+                from bitsandbytes.optim import AdamW
 
-                optimizer_cls = Adam8bit
+                is_paged = False
+                optim_bits = 32
+                if 'paged' in args.optim: is_paged = True
+                if '8bit' in args.optim: optim_bits = 8
+
+                optimizer_cls = AdamW
+                bnb_kwargs = {'is_paged' : is_paged, 'optim_bits' : optim_bits}
                 optimizer_kwargs.update(adam_kwargs)
+                optimizer_kwargs.update(bnb_kwargs)
             except ImportError:
                 raise ValueError("Trainer tried to instantiate bnb Adam8bit but bnb is not installed!")
         elif args.optim == OptimizerNames.ADAMW_ANYPRECISION:

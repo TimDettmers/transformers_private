@@ -126,6 +126,8 @@ class OptimizerNames(ExplicitEnum):
     ADAMW_APEX_FUSED = "adamw_apex_fused"
     ADAFACTOR = "adafactor"
     ADAMW_BNB = "adamw_bnb_8bit"
+    PAGED_ADAMW_BNB = "paged_adamw_bnb_8bit"
+    PAGED_ADAMW = "paged_adamw_bnb_32bit"
     ADAMW_ANYPRECISION = "adamw_anyprecision"
     SGD = "sgd"
     ADAGRAD = "adagrad"
