@@ -7,6 +7,10 @@ from packaging import version
 from ..utils import logging
 from .import_utils import is_accelerate_available, is_bitsandbytes_available
 
+from transformers import Seq2SeqTrainer
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from torch.utils.data import Dataset
+
 
 if is_bitsandbytes_available():
     import bitsandbytes as bnb
@@ -289,3 +293,94 @@ def get_keys_to_not_convert(model):
         filtered_module_names.append(name)
 
     return filtered_module_names
+
+
+class Seq2SeqTrainerBnb(Seq2SeqTrainer):
+    def __init__(
+        self,
+        model: Union["PreTrainedModel", nn.Module] = None,
+        args: "TrainingArguments" = None,
+        data_collator: Optional["DataCollator"] = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        tokenizer: Optional["PreTrainedTokenizerBase"] = None,
+        model_init: Optional[Callable[[], "PreTrainedModel"]] = None,
+        compute_metrics: Optional[Callable[["EvalPrediction"], Dict]] = None,
+        callbacks: Optional[List["TrainerCallback"]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+    ):
+        super().__init__(
+            model=model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            model_init=model_init,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        )
+        self.losses = []
+        self.steps = 0
+        self.mng = bnb.functional.MatformerManager.get_instance()
+
+
+    def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
+        """
+        Perform a training step on a batch of inputs.
+
+        Subclass and override to inject custom behavior.
+
+        Args:
+            model (`nn.Module`):
+                The model to train.
+            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
+                The inputs and targets of the model.
+
+                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
+                argument `labels`. Check your model's documentation for all accepted arguments.
+
+        Return:
+            `torch.Tensor`: The tensor with training loss on this batch.
+        """
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+
+        losses = []
+        while True:
+            with self.compute_loss_context_manager():
+                loss = self.compute_loss(model, inputs)
+                if self.args.n_gpu > 1:
+                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+                losses.append(loss)
+                self.mng.step()
+                if self.mng.current_matformer_factor == 1:
+                    break
+        self.steps += 1
+        loss = sum(losses)/len(losses)
+        self.losses.append(losses)
+
+        if self.mng.max_matformer_factor > 1 and (self.steps/self.args.gradient_accumulation_steps) % self.args.logging_steps == 0:
+            k = len(self.losses[0])
+            losses = torch.zeros(k, device=loss.device)
+            for i in range(k):
+                for l in self.losses:
+                    losses[i] += l[i]
+            losses /= len(self.losses)
+            self.losses = []
+
+            print(f'matformer losses: {losses.tolist()}')
+
+
+        if self.do_grad_scaling:
+            self.scaler.scale(loss).backward()
+        elif self.use_apex:
+            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            self.accelerator.backward(loss)
+
+        return loss.detach() / self.args.gradient_accumulation_steps
